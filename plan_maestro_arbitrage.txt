@@ -1,0 +1,1146 @@
+
+PLAN MAESTRO DE CONSTRUCCIÓN
+Sistema de Arbitraje BTC
+Detección y Simulación en Tiempo Real
+Exchanges
+Binance + Coinbase
+Par
+BTC/USDT
+Backend
+Python + FastAPI
+Frontend
+React + Vercel
+4 sesiones · 7-9 horas estimadas · Evaluación por jurado técnico
+
+Visión General del Sistema
+Este documento es la guía de construcción completa. Cada sesión es autocontenida: incluye el contexto exacto, el código base de partida, los archivos a crear, los comandos a ejecutar y el criterio de éxito. Puede usarse con cualquier IA de forma independiente.
+
+Arquitectura en capas
+Capa
+Tecnología
+Responsabilidad
+Deploy
+1 — Datos
+websockets + ccxt
+WS streams de Binance y Coinbase → formato unificado
+Railway
+2 — Engine
+Python asyncio
+Detección de arbitraje, cálculo neto, simulación de ejecución
+Railway
+3 — API
+FastAPI + SQLite
+REST + WebSocket push hacia el frontend
+Railway
+4 — UI
+React + Vite
+Dashboard en tiempo real: orderbook, oportunidades, P&L
+Vercel
+
+Fees reales configurados
+Exchange
+Maker fee
+Taker fee
+Withdrawal BTC
+Slippage estimado
+Binance
+0.10%
+0.10%
+0.0005 BTC
+0.05% por nivel
+Coinbase Advanced
+0.40%
+0.60%
+0.0000 BTC (on-chain variable)
+0.10% por nivel
+
+Criterios de evaluación del jurado → solución aplicada
+Criterio del jurado
+Solución en este sistema
+Velocidad / latencia
+WebSockets nativos, asyncio puro, sin polling. Detección en el mismo ciclo de evento del update del orderbook
+Rentabilidad neta
+Calculator aplica: taker fee compra + taker fee venta + slippage por profundidad + withdrawal fee. Umbral mínimo configurable
+Robustez / liquidez
+Executor consume niveles del orderbook hasta cubrir volumen. Circuit breaker con: max drawdown, spread mínimo, volatilidad
+Inteligencia del bot
+Priorización por profit neto esperado (no solo spread bruto). Cooldown por par para evitar re-entry inmediato
+Calidad de código
+Pydantic para tipos, docstrings en cada módulo, separación clara de capas, logging estructurado
+UI / experiencia
+WebSocket push reactivo, orderbook live con highlights de spread, feed de oportunidades, gráfica P&L acumulado
+
+Estructura de archivos final
+arbitrage-bot/
+├── backend/
+│   ├── main.py                  ← FastAPI app + WS broadcast
+│   ├── config.py                ← fees, thresholds, parámetros
+│   ├── exchanges/
+│   │   ├── base.py              ← clase abstracta ExchangeClient
+│   │   ├── binance.py           ← WS orderbook Binance
+│   │   └── coinbase.py          ← WS orderbook Coinbase
+│   ├── engine/
+│   │   ├── detector.py          ← detección de cross-exchange spread
+│   │   ├── calculator.py        ← profit neto con fees y slippage
+│   │   ├── executor.py          ← simulación + wallets + órdenes parciales
+│   │   └── circuit_breaker.py   ← límites de riesgo
+│   ├── models/
+│   │   ├── schemas.py           ← Pydantic models
+│   │   └── db.py                ← SQLAlchemy + SQLite
+│   ├── requirements.txt
+│   └── Procfile                 ← para Railway
+└── frontend/
+    ├── src/
+    │   ├── App.jsx
+    │   ├── hooks/
+    │   │   └── useWebSocket.js
+    │   └── components/
+    │       ├── OrderBook.jsx
+    │       ├── OpportunityFeed.jsx
+    │       ├── TradeHistory.jsx
+    │       ├── PnLChart.jsx
+    │       └── WalletStatus.jsx
+    ├── package.json
+    └── vercel.json
+
+S1
+WebSocket Clients + Detector + Calculator
+2-3 h
+
+Objetivo de esta sesión
+Al terminar esta sesión, el sistema debe poder conectarse a Binance y Coinbase por WebSocket, mantener el orderbook actualizado en memoria y detectar + calcular oportunidades de arbitraje en tiempo real, imprimiéndolas en consola.
+✓ Esta sesión no necesita base de datos ni frontend. Solo Python puro en terminal.
+Contexto que la IA necesita saber
+Par a monitorear: BTC/USDT en Binance, BTC-USD en Coinbase
+Profundidad del orderbook: 5 niveles (bids y asks)
+Fees Binance: taker 0.001 (0.10%)
+Fees Coinbase: taker 0.006 (0.60%)
+Slippage estimado: 0.05% Binance, 0.10% Coinbase por nivel consumido
+Umbral mínimo de profit neto: 0.15% para considerar ejecutable
+Volumen simulado por operación: 0.01 BTC fijo en esta sesión
+Archivos a crear en esta sesión
+backend/config.py
+# Crear este archivo exactamente así
+EXCHANGES = {
+    "binance": {
+        "taker_fee": 0.001,
+        "withdrawal_fee_btc": 0.0005,
+        "slippage_per_level": 0.0005,
+    },
+    "coinbase": {
+        "taker_fee": 0.006,
+        "withdrawal_fee_btc": 0.0,
+        "slippage_per_level": 0.001,
+    },
+}
+ 
+MIN_NET_PROFIT_PCT = 0.0015   # 0.15% mínimo para ejecutar
+TRADE_VOLUME_BTC   = 0.01     # volumen por operación simulada
+ORDERBOOK_DEPTH    = 5        # niveles a mantener
+backend/models/schemas.py
+from pydantic import BaseModel
+from typing import List, Tuple
+from datetime import datetime
+ 
+class OrderBookLevel(BaseModel):
+    price: float
+    quantity: float
+ 
+class OrderBook(BaseModel):
+    exchange: str
+    symbol: str
+    bids: List[OrderBookLevel]  # precio desc
+    asks: List[OrderBookLevel]  # precio asc
+    timestamp: datetime
+ 
+class ArbitrageOpportunity(BaseModel):
+    buy_exchange: str
+    sell_exchange: str
+    buy_price: float
+    sell_price: float
+    gross_spread_pct: float
+    net_profit_pct: float
+    net_profit_usd: float
+    volume_btc: float
+    executable: bool
+    detected_at: datetime
+backend/exchanges/base.py
+from abc import ABC, abstractmethod
+from models.schemas import OrderBook
+import asyncio
+ 
+class ExchangeClient(ABC):
+    def __init__(self, name: str):
+        self.name = name
+        self.orderbook: OrderBook | None = None
+        self._callbacks = []
+ 
+    def on_update(self, callback):
+        """Registrar función a llamar cuando el orderbook cambie"""
+        self._callbacks.append(callback)
+ 
+    async def _notify(self):
+        for cb in self._callbacks:
+            await cb(self.name, self.orderbook)
+ 
+    @abstractmethod
+    async def connect(self):
+        """Conectar al WS y mantener el loop"""
+        pass
+backend/exchanges/binance.py
+import websockets, json
+from datetime import datetime
+from .base import ExchangeClient
+from models.schemas import OrderBook, OrderBookLevel
+ 
+BINANCE_WS = "wss://stream.binance.com:9443/ws/btcusdt@depth5@100ms"
+ 
+class BinanceClient(ExchangeClient):
+    def __init__(self):
+        super().__init__("binance")
+ 
+    async def connect(self):
+        while True:  # reconexión automática
+            try:
+                async with websockets.connect(BINANCE_WS) as ws:
+                    async for msg in ws:
+                        data = json.loads(msg)
+                        self.orderbook = OrderBook(
+                            exchange="binance",
+                            symbol="BTC/USDT",
+                            bids=[OrderBookLevel(price=float(b[0]), quantity=float(b[1]))
+                                  for b in data["bids"]],
+                            asks=[OrderBookLevel(price=float(a[0]), quantity=float(a[1]))
+                                  for a in data["asks"]],
+                            timestamp=datetime.utcnow()
+                        )
+                        await self._notify()
+            except Exception as e:
+                print(f"Binance WS error: {e} — reconectando en 3s")
+                await asyncio.sleep(3)
+backend/exchanges/coinbase.py
+import websockets, json
+from datetime import datetime
+from .base import ExchangeClient
+from models.schemas import OrderBook, OrderBookLevel
+ 
+COINBASE_WS = "wss://advanced-trade-ws.coinbase.com"
+ 
+SUBSCRIBE_MSG = json.dumps({
+    "type": "subscribe",
+    "product_ids": ["BTC-USD"],
+    "channel": "level2"
+})
+ 
+class CoinbaseClient(ExchangeClient):
+    def __init__(self):
+        super().__init__("coinbase")
+        self._bids: dict = {}   # price_str -> qty
+        self._asks: dict = {}
+ 
+    def _snapshot(self):
+        bids = sorted([(float(p), float(q)) for p, q in self._bids.items() if float(q) > 0],
+                      reverse=True)[:5]
+        asks = sorted([(float(p), float(q)) for p, q in self._asks.items() if float(q) > 0])[:5]
+        from config import ORDERBOOK_DEPTH
+        return OrderBook(
+            exchange="coinbase",
+            symbol="BTC-USD",
+            bids=[OrderBookLevel(price=p, quantity=q) for p, q in bids],
+            asks=[OrderBookLevel(price=p, quantity=q) for p, q in asks],
+            timestamp=datetime.utcnow()
+        )
+ 
+    async def connect(self):
+        while True:
+            try:
+                async with websockets.connect(COINBASE_WS) as ws:
+                    await ws.send(SUBSCRIBE_MSG)
+                    async for msg in ws:
+                        data = json.loads(msg)
+                        channel = data.get("channel", "")
+                        if channel == "l2_data":
+                            for event in data.get("events", []):
+                                if event["type"] == "snapshot":
+                                    self._bids.clear()
+                                    self._asks.clear()
+                                for update in event.get("updates", []):
+                                    side = update["side"]
+                                    price = update["price_level"]
+                                    qty = update["new_quantity"]
+                                    if side == "bid":
+                                        self._bids[price] = qty
+                                    else:
+                                        self._asks[price] = qty
+                                if self._bids and self._asks:
+                                    self.orderbook = self._snapshot()
+                                    await self._notify()
+            except Exception as e:
+                print(f"Coinbase WS error: {e} — reconectando en 3s")
+                await asyncio.sleep(3)
+backend/engine/calculator.py
+from config import EXCHANGES, MIN_NET_PROFIT_PCT
+from models.schemas import OrderBook, ArbitrageOpportunity
+from datetime import datetime
+ 
+def calculate_opportunity(
+    buy_ob: OrderBook,
+    sell_ob: OrderBook,
+    volume_btc: float
+) -> ArbitrageOpportunity | None:
+    """
+    Calcula el profit neto de comprar en buy_ob y vender en sell_ob.
+    Consume niveles del orderbook hasta cubrir volume_btc.
+    Aplica: taker fee compra + venta + slippage + withdrawal fee.
+    """
+    buy_cfg  = EXCHANGES[buy_ob.exchange]
+    sell_cfg = EXCHANGES[sell_ob.exchange]
+ 
+    # Precio promedio ponderado de compra consumiendo niveles
+    remaining = volume_btc
+    buy_cost  = 0.0
+    for level in buy_ob.asks:
+        fill = min(remaining, level.quantity)
+        buy_cost  += fill * level.price
+        remaining -= fill
+        if remaining <= 0:
+            break
+    if remaining > 0:
+        return None  # liquidez insuficiente en asks
+ 
+    remaining  = volume_btc
+    sell_revenue = 0.0
+    for level in sell_ob.bids:
+        fill = min(remaining, level.quantity)
+        sell_revenue += fill * level.price
+        remaining    -= fill
+        if remaining <= 0:
+            break
+    if remaining > 0:
+        return None  # liquidez insuficiente en bids
+ 
+    buy_price  = buy_cost  / volume_btc
+    sell_price = sell_revenue / volume_btc
+ 
+    gross_spread_pct = (sell_price - buy_price) / buy_price
+ 
+    # Costos
+    fee_buy       = buy_cost     * buy_cfg["taker_fee"]
+    fee_sell      = sell_revenue * sell_cfg["taker_fee"]
+    slippage_buy  = buy_cost     * buy_cfg["slippage_per_level"]
+    slippage_sell = sell_revenue * sell_cfg["slippage_per_level"]
+    withdrawal    = buy_cfg["withdrawal_fee_btc"] * sell_price
+ 
+    total_cost   = buy_cost + fee_buy + slippage_buy + withdrawal
+    total_revenue= sell_revenue - fee_sell - slippage_sell
+    net_profit   = total_revenue - total_cost
+    net_profit_pct = net_profit / total_cost
+ 
+    return ArbitrageOpportunity(
+        buy_exchange   = buy_ob.exchange,
+        sell_exchange  = sell_ob.exchange,
+        buy_price      = round(buy_price, 2),
+        sell_price     = round(sell_price, 2),
+        gross_spread_pct = round(gross_spread_pct * 100, 4),
+        net_profit_pct   = round(net_profit_pct * 100, 4),
+        net_profit_usd   = round(net_profit, 4),
+        volume_btc       = volume_btc,
+        executable       = net_profit_pct >= MIN_NET_PROFIT_PCT * 100,
+        detected_at      = datetime.utcnow()
+    )
+backend/engine/detector.py
+import asyncio
+from config import TRADE_VOLUME_BTC
+from .calculator import calculate_opportunity
+from models.schemas import OrderBook, ArbitrageOpportunity
+from typing import Callable, Optional
+ 
+class ArbitrageDetector:
+    """
+    Compara orderbooks de dos exchanges y detecta oportunidades.
+    Se llama en cada update de cualquier exchange.
+    """
+    def __init__(self, on_opportunity: Callable):
+        self.orderbooks: dict[str, OrderBook] = {}
+        self.on_opportunity = on_opportunity
+ 
+    async def on_orderbook_update(self, exchange: str, ob: OrderBook):
+        self.orderbooks[exchange] = ob
+        if len(self.orderbooks) < 2:
+            return
+        exchanges = list(self.orderbooks.keys())
+        # Probar ambas direcciones
+        for buy_ex, sell_ex in [(exchanges[0], exchanges[1]),
+                                 (exchanges[1], exchanges[0])]:
+            opp = calculate_opportunity(
+                buy_ob     = self.orderbooks[buy_ex],
+                sell_ob    = self.orderbooks[sell_ex],
+                volume_btc = TRADE_VOLUME_BTC
+            )
+            if opp:
+                await self.on_opportunity(opp)
+backend/test_detector.py — script de prueba
+# Ejecutar con: python test_detector.py
+# Debe mostrar oportunidades detectadas en consola
+import asyncio
+from exchanges.binance  import BinanceClient
+from exchanges.coinbase import CoinbaseClient
+from engine.detector    import ArbitrageDetector
+ 
+async def on_opportunity(opp):
+    tag = "OK EJECUTABLE" if opp.executable else "  sub-threshold"
+    print(f"{tag} | buy:{opp.buy_exchange} @{opp.buy_price:,.2f} sell:{opp.sell_exchange} @{opp.sell_price:,.2f} neto:{opp.net_profit_pct:.4f}%")
+ 
+async def main():
+    binance  = BinanceClient()
+    coinbase = CoinbaseClient()
+    detector = ArbitrageDetector(on_opportunity)
+ 
+    binance.on_update(detector.on_orderbook_update)
+    coinbase.on_update(detector.on_orderbook_update)
+ 
+    await asyncio.gather(
+        binance.connect(),
+        coinbase.connect()
+    )
+ 
+asyncio.run(main())
+backend/requirements.txt
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+websockets==12.0
+pydantic==2.7.1
+sqlalchemy==2.0.30
+aiosqlite==0.20.0
+Comandos para ejecutar esta sesión
+# 1. Crear entorno virtual
+cd backend
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+ 
+# 2. Instalar dependencias
+pip install -r requirements.txt
+ 
+# 3. Crear archivos vacíos de __init__.py
+touch exchanges/__init__.py engine/__init__.py models/__init__.py
+ 
+# 4. Probar detector
+python test_detector.py
+Criterio de éxito — sesión 1 completada cuando:
+El script conecta a ambos exchanges sin errores en 10 segundos
+Se imprimen líneas con buy/sell prices cada pocos segundos
+Al menos ocasionalmente aparece "✅ EJECUTABLE" (spread > 0.15%)
+Si se desconecta un exchange, reconecta automáticamente en 3s
+
+⚠ Si Coinbase no devuelve datos, verificar que el endpoint sea "wss://advanced-trade-ws.coinbase.com" (Advanced Trade API, no la API legacy)
+
+S2
+Executor + Circuit Breaker + FastAPI + SQLite
+2-3 h
+
+Prerequisito
+La sesión 1 debe estar completada. El test_detector.py debe imprimir oportunidades en consola.
+Objetivo de esta sesión
+Agregar la capa de ejecución simulada (Executor con wallets), el sistema de límites de riesgo (Circuit Breaker) y exponer todo mediante FastAPI con endpoints REST y WebSocket. Los datos se persisten en SQLite.
+Contexto que la IA necesita saber
+Wallets iniciales: Binance: 1.0 BTC + 50,000 USDT | Coinbase: 1.0 BTC + 50,000 USD
+Volumen por operación: TRADE_VOLUME_BTC = 0.01 BTC (de config.py)
+Circuit breaker — drawdown máx: 5% del capital inicial antes de pausar
+Circuit breaker — cooldown: 30 segundos entre operaciones del mismo par
+Circuit breaker — spread mínimo requerido: net_profit_pct >= MIN_NET_PROFIT_PCT (0.15%)
+BD: SQLite en archivo arbitrage.db en backend/
+Puerto FastAPI: 8000
+Archivos a crear en esta sesión
+backend/engine/executor.py
+from datetime import datetime
+from models.schemas import ArbitrageOpportunity
+from config import TRADE_VOLUME_BTC
+ 
+INITIAL_WALLETS = {
+    "binance":  {"BTC": 1.0, "USDT": 50_000.0},
+    "coinbase": {"BTC": 1.0, "USD":  50_000.0},
+}
+ 
+class SimulatedExecutor:
+    """Simula la ejecución de órdenes y actualiza wallets."""
+    def __init__(self):
+        self.wallets = {
+            "binance":  {"BTC": 1.0, "USDT": 50_000.0},
+            "coinbase": {"BTC": 1.0, "USD":  50_000.0},
+        }
+        self.trades = []       # historial completo
+        self.total_pnl = 0.0   # USD acumulado
+ 
+    def _quote_currency(self, exchange: str) -> str:
+        return "USDT" if exchange == "binance" else "USD"
+ 
+    def can_execute(self, opp: ArbitrageOpportunity) -> tuple[bool, str]:
+        """Verificar balance suficiente antes de ejecutar."""
+        buy_quote = self._quote_currency(opp.buy_exchange)
+        cost = opp.buy_price * opp.volume_btc
+        if self.wallets[opp.buy_exchange][buy_quote] < cost:
+            return False, f"Balance insuficiente en {opp.buy_exchange}: necesita {cost:.2f}"
+        if self.wallets[opp.sell_exchange]["BTC"] < opp.volume_btc:
+            return False, f"BTC insuficiente en {opp.sell_exchange}"
+        return True, "ok"
+ 
+    def execute(self, opp: ArbitrageOpportunity) -> dict:
+        """Ejecutar operación y retornar registro del trade."""
+        ok, reason = self.can_execute(opp)
+        if not ok:
+            return {"status": "rejected", "reason": reason}
+ 
+        buy_quote  = self._quote_currency(opp.buy_exchange)
+        sell_quote = self._quote_currency(opp.sell_exchange)
+ 
+        cost_usd     = opp.buy_price  * opp.volume_btc
+        revenue_usd  = opp.sell_price * opp.volume_btc
+ 
+        # Actualizar wallets — compra
+        self.wallets[opp.buy_exchange][buy_quote] -= cost_usd
+        self.wallets[opp.buy_exchange]["BTC"]     += opp.volume_btc
+ 
+        # Actualizar wallets — venta
+        self.wallets[opp.sell_exchange]["BTC"]       -= opp.volume_btc
+        self.wallets[opp.sell_exchange][sell_quote]  += revenue_usd
+ 
+        self.total_pnl += opp.net_profit_usd
+ 
+        trade = {
+            "id":            len(self.trades) + 1,
+            "buy_exchange":  opp.buy_exchange,
+            "sell_exchange": opp.sell_exchange,
+            "buy_price":     opp.buy_price,
+            "sell_price":    opp.sell_price,
+            "volume_btc":    opp.volume_btc,
+            "net_profit_usd": opp.net_profit_usd,
+            "net_profit_pct": opp.net_profit_pct,
+            "wallets_after": {k: dict(v) for k, v in self.wallets.items()},
+            "executed_at":   datetime.utcnow().isoformat(),
+        }
+        self.trades.append(trade)
+        return {"status": "executed", "trade": trade}
+backend/engine/circuit_breaker.py
+from datetime import datetime, timedelta
+from models.schemas import ArbitrageOpportunity
+ 
+MAX_DRAWDOWN_PCT  = 0.05   # 5% pérdida máxima del capital inicial
+COOLDOWN_SECONDS  = 30     # segundos entre operaciones del mismo par
+INITIAL_CAPITAL   = 100_000.0  # USD total inicial estimado
+ 
+class CircuitBreaker:
+    def __init__(self):
+        self._last_trade: dict[str, datetime] = {}
+        self._triggered = False
+ 
+    def check(self, opp: ArbitrageOpportunity, total_pnl: float) -> tuple[bool, str]:
+        """Retorna (puede_ejecutar, motivo)"""
+        if self._triggered:
+            return False, "Circuit breaker activo — drawdown máximo alcanzado"
+ 
+        # Drawdown check
+        drawdown = -total_pnl / INITIAL_CAPITAL
+        if drawdown > MAX_DRAWDOWN_PCT:
+            self._triggered = True
+            return False, f"Circuit breaker ACTIVADO: drawdown {drawdown:.2%}"
+ 
+        # Cooldown check
+        pair_key = f"{opp.buy_exchange}-{opp.sell_exchange}"
+        if pair_key in self._last_trade:
+            elapsed = (datetime.utcnow() - self._last_trade[pair_key]).total_seconds()
+            if elapsed < COOLDOWN_SECONDS:
+                return False, f"Cooldown activo para {pair_key}: {COOLDOWN_SECONDS - elapsed:.0f}s restantes"
+ 
+        return True, "ok"
+ 
+    def record_trade(self, opp: ArbitrageOpportunity):
+        pair_key = f"{opp.buy_exchange}-{opp.sell_exchange}"
+        self._last_trade[pair_key] = datetime.utcnow()
+ 
+    def reset(self):
+        self._triggered = False
+        self._last_trade.clear()
+backend/models/db.py
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import DeclarativeBase, mapped_column, Mapped
+from sqlalchemy import String, Float, Boolean, DateTime
+from datetime import datetime
+ 
+DATABASE_URL = "sqlite+aiosqlite:///./arbitrage.db"
+engine = create_async_engine(DATABASE_URL, echo=False)
+ 
+class Base(DeclarativeBase): pass
+ 
+class OpportunityRecord(Base):
+    __tablename__ = "opportunities"
+    id:             Mapped[int]   = mapped_column(primary_key=True, autoincrement=True)
+    buy_exchange:   Mapped[str]   = mapped_column(String)
+    sell_exchange:  Mapped[str]   = mapped_column(String)
+    buy_price:      Mapped[float] = mapped_column(Float)
+    sell_price:     Mapped[float] = mapped_column(Float)
+    gross_spread_pct: Mapped[float] = mapped_column(Float)
+    net_profit_pct: Mapped[float] = mapped_column(Float)
+    net_profit_usd: Mapped[float] = mapped_column(Float)
+    executable:     Mapped[bool]  = mapped_column(Boolean)
+    detected_at:    Mapped[datetime] = mapped_column(DateTime)
+ 
+class TradeRecord(Base):
+    __tablename__ = "trades"
+    id:             Mapped[int]   = mapped_column(primary_key=True, autoincrement=True)
+    buy_exchange:   Mapped[str]   = mapped_column(String)
+    sell_exchange:  Mapped[str]   = mapped_column(String)
+    buy_price:      Mapped[float] = mapped_column(Float)
+    sell_price:     Mapped[float] = mapped_column(Float)
+    volume_btc:     Mapped[float] = mapped_column(Float)
+    net_profit_usd: Mapped[float] = mapped_column(Float)
+    net_profit_pct: Mapped[float] = mapped_column(Float)
+    executed_at:    Mapped[datetime] = mapped_column(DateTime)
+ 
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+backend/main.py
+import asyncio, json
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+ 
+from models.db import init_db, engine, OpportunityRecord, TradeRecord
+from models.schemas import ArbitrageOpportunity
+from exchanges.binance  import BinanceClient
+from exchanges.coinbase import CoinbaseClient
+from engine.detector    import ArbitrageDetector
+from engine.executor    import SimulatedExecutor
+from engine.circuit_breaker import CircuitBreaker
+ 
+executor = SimulatedExecutor()
+breaker  = CircuitBreaker()
+ws_clients: list[WebSocket] = []
+ 
+async def broadcast(data: dict):
+    msg = json.dumps(data, default=str)
+    for ws in list(ws_clients):
+        try: await ws.send_text(msg)
+        except: ws_clients.remove(ws)
+ 
+async def on_opportunity(opp: ArbitrageOpportunity):
+    # Persistir oportunidad
+    async with AsyncSession(engine) as session:
+        session.add(OpportunityRecord(**opp.model_dump()))
+        await session.commit()
+    # Broadcast al frontend
+    await broadcast({"type": "opportunity", "data": opp.model_dump()})
+ 
+    if not opp.executable:
+        return
+ 
+    ok, reason = breaker.check(opp, executor.total_pnl)
+    if not ok:
+        await broadcast({"type": "blocked", "reason": reason})
+        return
+ 
+    result = executor.execute(opp)
+    if result["status"] == "executed":
+        breaker.record_trade(opp)
+        trade = result["trade"]
+        async with AsyncSession(engine) as session:
+            session.add(TradeRecord(
+                buy_exchange=opp.buy_exchange, sell_exchange=opp.sell_exchange,
+                buy_price=opp.buy_price, sell_price=opp.sell_price,
+                volume_btc=opp.volume_btc,
+                net_profit_usd=opp.net_profit_usd, net_profit_pct=opp.net_profit_pct,
+                executed_at=opp.detected_at
+            ))
+            await session.commit()
+        await broadcast({"type": "trade", "data": trade})
+ 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    binance  = BinanceClient()
+    coinbase = CoinbaseClient()
+    detector = ArbitrageDetector(on_opportunity)
+    binance.on_update(detector.on_orderbook_update)
+    coinbase.on_update(detector.on_orderbook_update)
+    asyncio.create_task(binance.connect())
+    asyncio.create_task(coinbase.connect())
+    yield
+ 
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"],
+    allow_methods=["*"], allow_headers=["*"])
+ 
+@app.get("/api/trades")
+async def get_trades():
+    async with AsyncSession(engine) as s:
+        result = await s.execute(select(TradeRecord).order_by(TradeRecord.id.desc()).limit(100))
+        return [dict(r.__dict__) for r in result.scalars()]
+ 
+@app.get("/api/opportunities")
+async def get_opportunities():
+    async with AsyncSession(engine) as s:
+        result = await s.execute(select(OpportunityRecord).order_by(OpportunityRecord.id.desc()).limit(200))
+        return [dict(r.__dict__) for r in result.scalars()]
+ 
+@app.get("/api/wallets")
+async def get_wallets():
+    return executor.wallets
+ 
+@app.get("/api/pnl")
+async def get_pnl():
+    return {"total_pnl_usd": executor.total_pnl, "trade_count": len(executor.trades)}
+ 
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    ws_clients.append(ws)
+    try:
+        while True: await ws.receive_text()
+    except WebSocketDisconnect:
+        ws_clients.remove(ws)
+backend/Procfile (para Railway)
+web: uvicorn main:app --host 0.0.0.0 --port $PORT
+Comandos para ejecutar esta sesión
+# Con el venv activado:
+cd backend
+uvicorn main:app --reload
+ 
+# Verificar endpoints en otro terminal:
+curl http://localhost:8000/api/wallets
+curl http://localhost:8000/api/pnl
+curl http://localhost:8000/api/trades
+Criterio de éxito — sesión 2 completada cuando:
+uvicorn arranca sin errores y los WS se conectan a ambos exchanges
+GET /api/wallets devuelve los balances iniciales en JSON
+GET /api/trades devuelve lista (inicialmente vacía)
+Al conectar a ws://localhost:8000/ws desde Postman o wscat, llegan mensajes de tipo "opportunity" y eventualmente "trade"
+El archivo arbitrage.db se crea y tiene datos en tablas opportunities y trades
+
+⚠ Si SQLAlchemy falla con aiosqlite, verificar que la versión sea aiosqlite>=0.20.0
+
+S3
+Frontend React — Dashboard en Tiempo Real
+2-3 h
+
+Prerequisito
+El backend debe correr en localhost:8000 y responder en /ws y /api/*. El frontend se conecta a esas URLs durante desarrollo, y a la URL de Railway en producción.
+Objetivo de esta sesión
+Construir el dashboard React con 5 paneles: orderbook en tiempo real, feed de oportunidades detectadas, historial de trades ejecutados, gráfica de P&L acumulado y estado de wallets.
+Contexto que la IA necesita saber
+Framework: React 18 + Vite
+Styling: Tailwind CSS (incluido via CDN en index.html o instalado)
+Gráficas: Recharts (npm install recharts)
+Variable de entorno: VITE_API_URL = URL del backend (Railway en prod, localhost:8000 en dev)
+WebSocket path: ws://${VITE_API_URL}/ws
+REST base: http://${VITE_API_URL}/api
+Tema visual: Dark mode. Fondo negro/gris oscuro. Verde para profit. Rojo para pérdida. Monospace para precios.
+Actualización del orderbook: Via WebSocket (mensajes tipo "orderbook"). Fallback a polling si WS no disponible.
+Estructura de archivos del frontend
+frontend/
+├── src/
+│   ├── App.jsx             ← layout principal, gestión de estado global
+│   ├── hooks/
+│   │   ├── useWebSocket.js ← conexión WS + reconexión automática
+│   │   └── useApi.js       ← fetch de endpoints REST al cargar
+│   └── components/
+│       ├── OrderBook.jsx        ← tabla bid/ask de ambos exchanges
+│       ├── OpportunityFeed.jsx  ← lista live de oportunidades detectadas
+│       ├── TradeHistory.jsx     ← tabla de trades ejecutados
+│       ├── PnLChart.jsx         ← gráfica de línea P&L acumulado
+│       └── WalletStatus.jsx     ← balances actuales por exchange
+├── package.json
+└── vercel.json
+src/hooks/useWebSocket.js
+import { useEffect, useRef, useCallback } from "react"
+ 
+export function useWebSocket(url, onMessage) {
+  const ws = useRef(null)
+  const reconnectTimer = useRef(null)
+ 
+  const connect = useCallback(() => {
+    ws.current = new WebSocket(url)
+    ws.current.onmessage = (e) => {
+      try { onMessage(JSON.parse(e.data)) }
+      catch (_) {}
+    }
+    ws.current.onclose = () => {
+      reconnectTimer.current = setTimeout(connect, 3000)
+    }
+  }, [url, onMessage])
+ 
+  useEffect(() => {
+    connect()
+    return () => {
+      clearTimeout(reconnectTimer.current)
+      ws.current?.close()
+    }
+  }, [connect])
+}
+src/App.jsx — estado global y layout
+import { useState, useCallback, useEffect } from "react"
+import { useWebSocket } from "./hooks/useWebSocket"
+import OrderBook       from "./components/OrderBook"
+import OpportunityFeed from "./components/OpportunityFeed"
+import TradeHistory    from "./components/TradeHistory"
+import PnLChart        from "./components/PnLChart"
+import WalletStatus    from "./components/WalletStatus"
+ 
+const API = import.meta.env.VITE_API_URL || "localhost:8000"
+const WS_URL = `ws://${API}/ws`
+ 
+export default function App() {
+  const [orderbooks, setOrderbooks]     = useState({})
+  const [opportunities, setOpportunities] = useState([])
+  const [trades, setTrades]             = useState([])
+  const [pnl, setPnl]                   = useState(0)
+  const [wallets, setWallets]            = useState({})
+ 
+  // Cargar historial al iniciar
+  useEffect(() => {
+    fetch(`http://${API}/api/trades`).then(r => r.json()).then(setTrades)
+    fetch(`http://${API}/api/wallets`).then(r => r.json()).then(setWallets)
+    fetch(`http://${API}/api/pnl`).then(r => r.json()).then(d => setPnl(d.total_pnl_usd))
+  }, [])
+ 
+  const onMessage = useCallback((msg) => {
+    if (msg.type === "orderbook") {
+      setOrderbooks(prev => ({ ...prev, [msg.exchange]: msg.data }))
+    } else if (msg.type === "opportunity") {
+      setOpportunities(prev => [msg.data, ...prev].slice(0, 100))
+    } else if (msg.type === "trade") {
+      setTrades(prev => [msg.data, ...prev])
+      setPnl(prev => prev + msg.data.net_profit_usd)
+      setWallets(msg.data.wallets_after)
+    }
+  }, [])
+ 
+  useWebSocket(WS_URL, onMessage)
+ 
+  return (
+    <div className="min-h-screen bg-gray-950 text-gray-100 font-mono p-4">
+      <header className="mb-6">
+        <h1 className="text-2xl font-bold text-white">BTC Arbitrage Monitor</h1>
+        <p className="text-gray-400 text-sm">Binance ↔ Coinbase · Simulación en tiempo real</p>
+      </header>
+      <div className="grid grid-cols-12 gap-4">
+        <div className="col-span-5"><OrderBook orderbooks={orderbooks} /></div>
+        <div className="col-span-4"><OpportunityFeed opportunities={opportunities} /></div>
+        <div className="col-span-3"><WalletStatus wallets={wallets} pnl={pnl} /></div>
+        <div className="col-span-8"><PnLChart trades={trades} /></div>
+        <div className="col-span-4"><TradeHistory trades={trades} /></div>
+      </div>
+    </div>
+  )
+}
+src/components/OrderBook.jsx
+export default function OrderBook({ orderbooks }) {
+  const exchanges = ["binance", "coinbase"]
+  return (
+    <div className="bg-gray-900 rounded-xl p-4 h-full">
+      <h2 className="text-sm text-gray-400 uppercase mb-3">Order Book</h2>
+      <div className="grid grid-cols-2 gap-4">
+        {exchanges.map(ex => {
+          const ob = orderbooks[ex]
+          return (
+            <div key={ex}>
+              <div className="text-xs text-gray-500 capitalize mb-1">{ex}</div>
+              {ob ? (
+                <>
+                  {ob.asks.slice().reverse().map((a, i) => (
+                    <div key={i} className="flex justify-between text-xs text-red-400">
+                      <span>{a.price.toLocaleString()}</span>
+                      <span className="text-gray-500">{a.quantity.toFixed(4)}</span>
+                    </div>
+                  ))}
+                  <div className="border-t border-gray-700 my-1"/>
+                  {ob.bids.map((b, i) => (
+                    <div key={i} className="flex justify-between text-xs text-green-400">
+                      <span>{b.price.toLocaleString()}</span>
+                      <span className="text-gray-500">{b.quantity.toFixed(4)}</span>
+                    </div>
+                  ))}
+                </>
+              ) : <div className="text-xs text-gray-600">Conectando...</div>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+src/components/OpportunityFeed.jsx
+export default function OpportunityFeed({ opportunities }) {
+  return (
+    <div className="bg-gray-900 rounded-xl p-4 h-80 overflow-y-auto">
+      <h2 className="text-sm text-gray-400 uppercase mb-3">Oportunidades detectadas</h2>
+      {opportunities.map((opp, i) => (
+        <div key={i} className={`mb-2 p-2 rounded text-xs border-l-2 ${
+          opp.executable ? "border-green-500 bg-green-950" : "border-gray-700 bg-gray-800"
+        }`}>
+          <div className="flex justify-between">
+            <span className="text-gray-300">{opp.buy_exchange} → {opp.sell_exchange}</span>
+            <span className={opp.executable ? "text-green-400" : "text-gray-500"}>
+              {opp.net_profit_pct > 0 ? "+" : ""}{opp.net_profit_pct.toFixed(4)}%
+            </span>
+          </div>
+          <div className="text-gray-500 text-xs">
+            buy ${opp.buy_price.toLocaleString()} · sell ${opp.sell_price.toLocaleString()}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+src/components/PnLChart.jsx
+import { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts"
+ 
+export default function PnLChart({ trades }) {
+  let cumulative = 0
+  const data = trades.slice().reverse().map((t, i) => {
+    cumulative += t.net_profit_usd
+    return { trade: i + 1, pnl: Number(cumulative.toFixed(4)) }
+  })
+ 
+  return (
+    <div className="bg-gray-900 rounded-xl p-4">
+      <h2 className="text-sm text-gray-400 uppercase mb-3">P&L Acumulado (USD)</h2>
+      {data.length === 0 ? (
+        <div className="text-gray-600 text-sm">Sin trades aún</div>
+      ) : (
+        <ResponsiveContainer width="100%" height={200}>
+          <LineChart data={data}>
+            <XAxis dataKey="trade" stroke="#4B5563" fontSize={11}/>
+            <YAxis stroke="#4B5563" fontSize={11}/>
+            <Tooltip
+              contentStyle={{ background: "#111827", border: "1px solid #374151", borderRadius: 8 }}
+              formatter={(v) => [`$${v}`, "P&L"]}
+            />
+            <ReferenceLine y={0} stroke="#6B7280" strokeDasharray="3 3"/>
+            <Line type="monotone" dataKey="pnl" stroke="#10B981" dot={false} strokeWidth={2}/>
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  )
+}
+src/components/WalletStatus.jsx
+export default function WalletStatus({ wallets, pnl }) {
+  return (
+    <div className="bg-gray-900 rounded-xl p-4">
+      <h2 className="text-sm text-gray-400 uppercase mb-3">Wallets</h2>
+      <div className={`text-2xl font-bold mb-4 ${pnl >= 0 ? "text-green-400" : "text-red-400"}`}>
+        {pnl >= 0 ? "+" : ""}${pnl.toFixed(4)}
+        <span className="text-sm text-gray-500 ml-2">P&L total</span>
+      </div>
+      {Object.entries(wallets).map(([exchange, balances]) => (
+        <div key={exchange} className="mb-3">
+          <div className="text-xs text-gray-500 capitalize mb-1">{exchange}</div>
+          {Object.entries(balances).map(([currency, amount]) => (
+            <div key={currency} className="flex justify-between text-sm">
+              <span className="text-gray-400">{currency}</span>
+              <span className="text-white">{typeof amount === "number" ? amount.toFixed(4) : amount}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+src/components/TradeHistory.jsx
+export default function TradeHistory({ trades }) {
+  return (
+    <div className="bg-gray-900 rounded-xl p-4 h-64 overflow-y-auto">
+      <h2 className="text-sm text-gray-400 uppercase mb-3">Trades ejecutados</h2>
+      {trades.length === 0 && <div className="text-gray-600 text-sm">Sin trades aún</div>}
+      {trades.map((t, i) => (
+        <div key={i} className="mb-2 pb-2 border-b border-gray-800 text-xs">
+          <div className="flex justify-between">
+            <span className="text-gray-300">{t.buy_exchange} → {t.sell_exchange}</span>
+            <span className={t.net_profit_usd >= 0 ? "text-green-400" : "text-red-400"}>
+              {t.net_profit_usd >= 0 ? "+" : ""}${t.net_profit_usd.toFixed(4)}
+            </span>
+          </div>
+          <div className="text-gray-600">
+            {t.volume_btc} BTC · {t.net_profit_pct.toFixed(4)}%
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+frontend/package.json
+{
+  "name": "arbitrage-dashboard",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "recharts": "^2.12.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3",
+    "vite": "^5.2.0"
+  }
+}
+frontend/vercel.json
+{
+  "rewrites": [{ "source": "/(.*)", "destination": "/" }],
+  "env": {
+    "VITE_API_URL": "TU_BACKEND_EN_RAILWAY.railway.app"
+  }
+}
+Comandos para ejecutar esta sesión
+cd frontend
+npm install
+npm run dev
+# Abrir http://localhost:5173
+ 
+# Para que el frontend apunte al backend local:
+# Crear frontend/.env.local con:
+VITE_API_URL=localhost:8000
+Criterio de éxito — sesión 3 completada cuando:
+El dashboard carga en localhost:5173 sin errores de consola
+Los paneles de orderbook muestran precios actualizándose en tiempo real
+Las oportunidades aparecen en el feed con color verde si son ejecutables
+Al ejecutarse un trade, el panel de wallets se actualiza y la gráfica P&L avanza
+El historial de trades muestra las operaciones con profit/loss en verde/rojo
+
+S4
+Deploy + Pulido + Documentación
+1-2 h
+
+Prerequisito
+El sistema funciona localmente. Backend en puerto 8000, frontend en 5173, datos fluyendo por WebSocket.
+Objetivo de esta sesión
+Desplegar el sistema en producción, agregar los últimos detalles que puntúan con el jurado y dejar el código bien documentado.
+Paso 1 — Deploy del backend en Railway
+Crear cuenta en railway.app si no existe
+Desde la carpeta backend: railway init → seleccionar "Deploy from GitHub" o usar CLI
+Variables de entorno a configurar en Railway:
+PORT=8000  # Railway lo asigna automáticamente via $PORT
+Verificar que el Procfile esté presente: web: uvicorn main:app --host 0.0.0.0 --port $PORT
+Copiar la URL pública que genera Railway (formato: xxxx.railway.app)
+⚠ Railway free tier tiene 500 horas/mes. Suficiente para la demo.
+Paso 2 — Deploy del frontend en Vercel
+Actualizar frontend/vercel.json con la URL real de Railway
+Ejecutar: vercel --prod desde la carpeta frontend (instalar con npm i -g vercel)
+O conectar el repositorio de GitHub desde vercel.com → Import Project
+Configurar variable de entorno en el dashboard de Vercel:
+VITE_API_URL = tu-backend.railway.app
+Verificar que el WebSocket use wss:// (no ws://) en producción — Railway tiene TLS
+✓ Cambiar en useWebSocket.js: const protocol = location.protocol === "https:" ? "wss" : "ws"
+Paso 3 — Fix WebSocket protocol para producción
+// En src/hooks/useWebSocket.js, cambiar la URL base en App.jsx:
+ 
+const WS_PROTOCOL = window.location.protocol === "https:" ? "wss" : "ws"
+const WS_URL = `${WS_PROTOCOL}://${API}/ws`
+Paso 4 — Agregar broadcast del orderbook desde el backend
+El frontend necesita recibir el orderbook por WebSocket para mostrar los precios en tiempo real. Agregar en main.py dentro de on_opportunity:
+# Agregar al inicio de on_opportunity en main.py
+# (antes del bloque de persistencia)
+ 
+async def on_opportunity(opp: ArbitrageOpportunity):
+    # Broadcast orderbook actualizado
+    from engine.detector import detector_instance  # ver nota abajo
+    for ex_name, ob in detector_instance.orderbooks.items():
+        if ob:
+            await broadcast({
+                "type": "orderbook",
+                "exchange": ex_name,
+                "data": ob.model_dump()
+            })
+    # ... resto del código existente
+⚠ Para evitar importación circular, pasar el detector como argumento al crear on_opportunity, o usar una variable global en main.py
+Paso 5 — Mejoras de presentación para el jurado (opcionales pero recomendadas)
+A. Indicador de latencia en el header
+// En App.jsx, medir tiempo desde que llega un mensaje de opportunity
+// hasta que se renderiza en el DOM
+const [latency, setLatency] = useState(null)
+ 
+// En onMessage, al recibir "opportunity":
+const now = Date.now()
+const detected = new Date(msg.data.detected_at).getTime()
+setLatency(now - detected)
+ 
+// En el header:
+<span className="text-xs text-gray-500">
+  Latencia: {latency ? `${latency}ms` : "—"}
+</span>
+B. Highlight de spread en el orderbook
+// En OrderBook.jsx, cuando el mejor ask de un exchange < mejor bid del otro:
+// agregar clase "text-yellow-300 font-bold" al precio que crea el spread
+C. Badge de circuit breaker en el header
+// Agregar en App.jsx estado "blocked"
+const [blocked, setBlocked] = useState(null)
+ 
+// En onMessage:
+if (msg.type === "blocked") setBlocked(msg.reason)
+ 
+// En el header:
+{blocked && (
+  <span className="text-xs text-amber-400 bg-amber-950 px-2 py-1 rounded">
+    ⚡ {blocked}
+  </span>
+)}
+Paso 6 — Documentación en el código
+Para el criterio de calidad de código, asegurarse de que cada módulo tenga un docstring en la primera línea:
+# detector.py
+"""
+ArbitrageDetector: compara orderbooks de dos exchanges en tiempo real.
+Se dispara en cada update de cualquier exchange.
+Evalúa ambas direcciones (buy_A→sell_B y buy_B→sell_A).
+"""
+ 
+# calculator.py
+"""
+Calcula el profit neto de una oportunidad de arbitraje.
+Considera: taker fees, slippage por profundidad del orderbook,
+withdrawal fees y volumen parcial si la liquidez es insuficiente.
+"""
+Checklist final antes de la demo
+#
+Ítem de verificación
+Estado
+1
+Backend Railway responde en https://tu-backend.railway.app/api/pnl
+☐
+2
+Frontend Vercel carga en https://tu-app.vercel.app
+☐
+3
+Orderbook se actualiza en tiempo real (cada 1-2 segundos)
+☐
+4
+Oportunidades aparecen en el feed con profit neto calculado
+☐
+5
+Al menos un trade se ejecuta durante la demo (o ya hay historial)
+☐
+6
+Gráfica P&L muestra al menos una curva con datos
+☐
+7
+Wallets muestran balances actualizados correctamente
+☐
+8
+Circuit breaker visible en UI cuando se activa
+☐
+9
+Latencia < 500ms entre detección y visualización en UI
+☐
+10
+Código tiene docstrings en todos los módulos del engine
+☐
+
+
+Sistema completo. Buena suerte con el jurado.
