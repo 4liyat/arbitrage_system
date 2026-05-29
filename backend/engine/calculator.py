@@ -64,6 +64,6 @@ def calculate_opportunity(
         net_profit_pct   = round(net_profit_pct * 100, 4),
         net_profit_usd   = round(net_profit, 4),
         volume_btc       = volume_btc,
-        executable       = net_profit_pct >= MIN_NET_PROFIT_PCT,
+        executable       = net_profit_pct >= MIN_NET_PROFIT_PCT * 100,
         detected_at      = datetime.utcnow()
     )

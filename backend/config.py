@@ -11,6 +11,6 @@ EXCHANGES = {
     },
 }
 
-MIN_NET_PROFIT_PCT = -0.05   # -5% mínimo para probar ejecutable
+MIN_NET_PROFIT_PCT = 0.0015   # 0.15% mínimo para ejecutar
 TRADE_VOLUME_BTC   = 0.01     # volumen por operación simulada
 ORDERBOOK_DEPTH    = 5        # niveles a mantener

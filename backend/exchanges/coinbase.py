@@ -1,5 +1,4 @@
 import websockets, json
-import asyncio
 from datetime import datetime
 from .base import ExchangeClient
 from models.schemas import OrderBook, OrderBookLevel
@@ -19,10 +18,10 @@ class CoinbaseClient(ExchangeClient):
         self._asks: dict = {}
 
     def _snapshot(self):
-        from config import ORDERBOOK_DEPTH
         bids = sorted([(float(p), float(q)) for p, q in self._bids.items() if float(q) > 0],
-                      reverse=True)[:ORDERBOOK_DEPTH]
-        asks = sorted([(float(p), float(q)) for p, q in self._asks.items() if float(q) > 0])[:ORDERBOOK_DEPTH]
+                      reverse=True)[:5]
+        asks = sorted([(float(p), float(q)) for p, q in self._asks.items() if float(q) > 0])[:5]
+        from config import ORDERBOOK_DEPTH
         return OrderBook(
             exchange="coinbase",
             symbol="BTC-USD",
@@ -34,14 +33,10 @@ class CoinbaseClient(ExchangeClient):
     async def connect(self):
         while True:
             try:
-                print(f"Conectando a Coinbase Advanced WS en {COINBASE_WS}...")
-                async with websockets.connect(COINBASE_WS, max_size=None) as ws:
-                    print("Conexión WebSocket a Coinbase establecida. Enviando suscripción...")
+                async with websockets.connect(COINBASE_WS) as ws:
                     await ws.send(SUBSCRIBE_MSG)
-                    print("Suscripción enviada a Coinbase. Esperando mensajes...")
                     async for msg in ws:
                         data = json.loads(msg)
-                        print(f"Coinbase WS msg recibido: {data}")
                         channel = data.get("channel", "")
                         if channel == "l2_data":
                             for event in data.get("events", []):
