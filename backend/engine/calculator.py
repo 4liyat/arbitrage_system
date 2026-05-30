@@ -8,9 +8,20 @@ def calculate_opportunity(
     volume_btc: float
 ) -> ArbitrageOpportunity | None:
     """
-    Calcula el profit neto de comprar en buy_ob y vender en sell_ob.
-    Consume niveles del orderbook hasta cubrir volume_btc.
-    Aplica: taker fee compra + venta + slippage + withdrawal fee.
+    Calcula el profit neto de una oportunidad de arbitraje.
+
+    Considera:
+    1. Precio promedio ponderado de compra (consumiendo asks de buy_ob).
+    2. Precio promedio ponderado de venta (consumiendo bids de sell_ob).
+    3. Costos: Taker fee (compra + venta), Slippage (por nivel consumido), y Withdrawal fee.
+
+    Args:
+        buy_ob: OrderBook del exchange donde se compra (asks).
+        sell_ob: OrderBook del exchange donde se vende (bids).
+        volume_btc: Volumen de BTC a operar.
+
+    Returns:
+        ArbitrageOpportunity: Objeto con el cálculo de la oportunidad, o None si la liquidez es insuficiente.
     """
     buy_cfg  = EXCHANGES[buy_ob.exchange]
     sell_cfg = EXCHANGES[sell_ob.exchange]

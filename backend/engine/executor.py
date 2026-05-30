@@ -8,21 +8,29 @@ INITIAL_WALLETS = {
 }
 
 class SimulatedExecutor:
-    """Simula la ejecución de órdenes y actualiza wallets."""
+    """
+    Simula la ejecución de órdenes de arbitraje.
+    Gestiona el estado de las carteras (wallets) y el P&L acumulado.
+    """
     def __init__(self):
         self.wallets = {
             "binance":  {"BTC": 1.0, "USDT": 50_000.0},
             "coinbase": {"BTC": 1.0, "USD":  50_000.0},
         }
-        self.trades = []       # historial completo
-        self.total_pnl = 0.0   # USD acumulado
+        self.trades = []       # historial completo de trades
+        self.total_pnl = 0.0   # P&L acumulado en USD
 
     def _quote_currency(self, exchange: str) -> str:
         """Determina la moneda de quote (USDT o USD) para el exchange dado."""
         return "USDT" if exchange == "binance" else "USD"
 
     def can_execute(self, opp: ArbitrageOpportunity) -> tuple[bool, str]:
-        """Verificar balance suficiente antes de ejecutar."""
+        """
+        Verifica si hay suficiente liquidez en las carteras para ejecutar la operación.
+
+        Returns:
+            tuple[bool, str]: (puede_ejecutar, motivo_fallo)
+        """
         buy_quote = self._quote_currency(opp.buy_exchange)
         cost = opp.buy_price * opp.volume_btc
         
@@ -37,7 +45,12 @@ class SimulatedExecutor:
         return True, "ok"
 
     def execute(self, opp: ArbitrageOpportunity) -> dict:
-        """Ejecutar operación y retornar registro del trade."""
+        """
+        Ejecuta la operación simulada, actualiza las carteras y registra el trade.
+
+        Returns:
+            dict: Resultado de la ejecución (status y trade data).
+        """
         ok, reason = self.can_execute(opp)
         if not ok:
             return {"status": "rejected", "reason": reason}
@@ -50,11 +63,11 @@ class SimulatedExecutor:
 
         # --- Actualizar wallets ---
         
-        # 1. Compra (Buy)
+        # 1. Compra (Buy): Gasta quote, recibe BTC
         self.wallets[opp.buy_exchange][buy_quote] -= cost_usd
         self.wallets[opp.buy_exchange]["BTC"]     += opp.volume_btc
 
-        # 2. Venta (Sell)
+        # 2. Venta (Sell): Gasta BTC, recibe quote
         self.wallets[opp.sell_exchange]["BTC"]       -= opp.volume_btc
         self.wallets[opp.sell_exchange][sell_quote]  += revenue_usd
 

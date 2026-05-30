@@ -41,6 +41,7 @@ async def broadcast(data: dict):
 async def on_opportunity(opp: ArbitrageOpportunity):
     """
     Callback principal: Maneja la persistencia, chequeo de riesgo y ejecución de la oportunidad.
+    Este método es llamado por el detector en cada update de orderbook.
     """
     # 1. Broadcast Orderbook Update (S4 requirement)
     # Esto asegura que el frontend siempre tenga los datos de precios más recientes.
@@ -91,6 +92,9 @@ async def on_opportunity(opp: ArbitrageOpportunity):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Gestiona el ciclo de vida de la aplicación: inicialización de DB y conexión de WS.
+    """
     # Inicialización de la base de datos
     await init_db()
     
@@ -117,26 +121,31 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"],
 
 @app.get("/api/trades")
 async def get_trades():
+    """Obtiene los últimos 100 trades ejecutados."""
     async with AsyncSession(engine) as s:
         result = await s.execute(select(TradeRecord).order_by(TradeRecord.id.desc()).limit(100))
         return [dict(r.__dict__) for r in result.scalars()]
 
 @app.get("/api/opportunities")
 async def get_opportunities():
+    """Obtiene los últimos 200 oportunidades detectadas."""
     async with AsyncSession(engine) as s:
         result = await s.execute(select(OpportunityRecord).order_by(OpportunityRecord.id.desc()).limit(200))
         return [dict(r.__dict__) for r in result.scalars()]
 
 @app.get("/api/wallets")
 async def get_wallets():
+    """Devuelve el estado actual de las carteras simuladas."""
     return executor.wallets
 
 @app.get("/api/pnl")
 async def get_pnl():
+    """Devuelve el P&L total y el conteo de trades."""
     return {"total_pnl_usd": executor.total_pnl, "trade_count": len(executor.trades)}
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
+    """Endpoint WebSocket para broadcast de datos en tiempo real."""
     await ws.accept()
     ws_clients.append(ws)
     try:

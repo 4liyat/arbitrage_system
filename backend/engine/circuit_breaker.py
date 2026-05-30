@@ -6,12 +6,25 @@ COOLDOWN_SECONDS  = 30     # segundos entre operaciones del mismo par
 INITIAL_CAPITAL   = 100_000.0  # USD total inicial estimado
 
 class CircuitBreaker:
+    """
+    Implementa lógica de gestión de riesgos para detener la ejecución de trades
+    cuando se alcanza un drawdown máximo o se viola un periodo de cooldown.
+    """
     def __init__(self):
         self._last_trade: dict[str, datetime] = {}
         self._triggered = False
 
     def check(self, opp: ArbitrageOpportunity, total_pnl: float) -> tuple[bool, str]:
-        """Retorna (puede_ejecutar, motivo)"""
+        """
+        Verifica si la operación puede ejecutarse según las reglas de riesgo.
+
+        Args:
+            opp: La oportunidad de arbitraje detectada.
+            total_pnl: El P&L acumulado actual.
+
+        Returns:
+            tuple[bool, str]: (puede_ejecutar, motivo)
+        """
         if self._triggered:
             return False, "Circuit breaker activo — drawdown máximo alcanzado"
 
@@ -31,9 +44,11 @@ class CircuitBreaker:
         return True, "ok"
 
     def record_trade(self, opp: ArbitrageOpportunity):
+        """Registra la ejecución de un trade para aplicar el cooldown."""
         pair_key = f"{opp.buy_exchange}-{opp.sell_exchange}"
         self._last_trade[pair_key] = datetime.utcnow()
 
     def reset(self):
+        """Resetea el estado del Circuit Breaker."""
         self._triggered = False
         self._last_trade.clear()

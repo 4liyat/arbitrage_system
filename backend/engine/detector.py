@@ -6,14 +6,18 @@ from typing import Callable, Optional
 
 class ArbitrageDetector:
     """
-    Compara orderbooks de dos exchanges y detecta oportunidades.
-    Se llama en cada update de cualquier exchange.
+    ArbitrageDetector: compara orderbooks de dos exchanges en tiempo real.
+    Se dispara en cada update de cualquier exchange.
+    Evalúa ambas direcciones (buy_A→sell_B y buy_B→sell_A) para encontrar oportunidades.
     """
     def __init__(self, on_opportunity: Callable):
         self.orderbooks: dict[str, OrderBook] = {}
         self.on_opportunity = on_opportunity
 
     async def on_orderbook_update(self, exchange: str, ob: OrderBook):
+        """
+        Procesa una actualización de orderbook, actualiza el estado interno y dispara la detección.
+        """
         self.orderbooks[exchange] = ob
         if len(self.orderbooks) < 2:
             return
