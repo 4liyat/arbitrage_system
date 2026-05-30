@@ -39,6 +39,7 @@ export default function OrderBook({ orderbooks }) {
       <div className="grid grid-cols-2 gap-4">
         {exchanges.map(ex => {
           const ob = orderbooks[ex]
+          // Check if the best bid/ask for the entire system matches the top level of this exchange
           const isBestBid = bestBid.exchange === ex && ob && ob.bids.length > 0 && ob.bids[0].price === bestBid.price;
           const isBestAsk = bestAsk.exchange === ex && ob && ob.asks.length > 0 && ob.asks[0].price === bestAsk.price;
 

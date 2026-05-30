@@ -7,6 +7,7 @@ import PnLChart        from "./components/PnLChart"
 import WalletStatus    from "./components/WalletStatus"
 
 const API = import.meta.env.VITE_API_URL || "localhost:8000"
+// Use the base URL for the hook, letting the hook handle the protocol prefixing (ws/wss)
 const WS_URL = `${API}/ws`
 
 export default function App() {
