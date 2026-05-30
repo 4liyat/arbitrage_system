@@ -7,7 +7,7 @@ import PnLChart        from "./components/PnLChart"
 import WalletStatus    from "./components/WalletStatus"
 
 const API = import.meta.env.VITE_API_URL || "localhost:8000"
-const WS_URL = `ws://${API}/ws`
+const WS_URL = `${API}/ws`
 
 export default function App() {
   const [orderbooks, setOrderbooks]     = useState({})
@@ -30,7 +30,7 @@ export default function App() {
       setOrderbooks(prev => ({ ...prev, [msg.exchange]: msg.data }))
     } else if (msg.type === "opportunity") {
       setOpportunities(prev => [msg.data, ...prev].slice(0, 100))
-      // Calculate latency (S4 suggestion)
+      // Calculate latency
       const now = Date.now()
       const detected = new Date(msg.data.detected_at).getTime()
       setLatency(now - detected);
