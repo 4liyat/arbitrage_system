@@ -1,4 +1,5 @@
 import websockets, json
+import asyncio
 from datetime import datetime
 from .base import ExchangeClient
 from models.schemas import OrderBook, OrderBookLevel
