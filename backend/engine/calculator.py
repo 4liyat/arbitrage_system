@@ -8,12 +8,9 @@ def calculate_opportunity(
     volume_btc: float
 ) -> ArbitrageOpportunity | None:
     """
-    Calcula el profit neto de una oportunidad de arbitraje.
-
-    Considera:
-    1. Precio promedio ponderado de compra (consumiendo asks de buy_ob).
-    2. Precio promedio ponderado de venta (consumiendo bids de sell_ob).
-    3. Costos: Taker fee (compra + venta), Slippage (por nivel consumido), y Withdrawal fee.
+    Calcula el profit neto de comprar en buy_ob y vender en sell_ob.
+    Consume niveles del orderbook hasta cubrir volume_btc.
+    Aplica: taker fee compra + venta + slippage + withdrawal fee.
 
     Args:
         buy_ob: OrderBook del exchange donde se compra (asks).
@@ -77,4 +74,4 @@ def calculate_opportunity(
         volume_btc       = volume_btc,
         executable       = net_profit_pct >= MIN_NET_PROFIT_PCT * 100,
         detected_at      = datetime.utcnow()
-    )
+)

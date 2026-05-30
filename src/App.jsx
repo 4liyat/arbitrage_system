@@ -54,12 +54,14 @@ export default function App() {
           <p className="text-gray-400 text-sm">Binance ↔ Coinbase · Simulación en tiempo real</p>
         </div>
         <div className="flex items-center space-x-4">
+          {/* Circuit Breaker Status Badge */}
           {circuitBreakerStatus && (
-            <span className="text-xs text-amber-400 bg-amber-950 px-3 py-1 rounded-full border border-amber-700">
+            <span className="text-xs text-amber-400 bg-amber-950 px-3 py-1 rounded-full border border-amber-700 flex items-center">
               ⚡ {circuitBreakerStatus}
             </span>
           )}
-          <span className="text-xs text-gray-500">
+          {/* Latency Indicator */}
+          <span className="text-xs text-gray-500 bg-gray-800 px-3 py-1 rounded-full border border-gray-700">
             Latencia: {latency ? `${latency}ms` : "—"}
           </span>
         </div>
