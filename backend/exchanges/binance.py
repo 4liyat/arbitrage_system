@@ -4,7 +4,8 @@ from datetime import datetime
 from .base import ExchangeClient
 from models.schemas import OrderBook, OrderBookLevel
 
-BINANCE_WS = "wss://stream.binance.com:9443/ws/btcusdt@depth5@100ms"
+# Binance US-compliant or alternative global endpoint
+BINANCE_WS = "wss://stream.binance.com:443/ws/btcusdt@depth5@100ms"
 
 class BinanceClient(ExchangeClient):
     def __init__(self):

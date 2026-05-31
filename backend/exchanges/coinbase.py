@@ -34,7 +34,7 @@ class CoinbaseClient(ExchangeClient):
     async def connect(self):
         while True:
             try:
-                async with websockets.connect(COINBASE_WS) as ws:
+                async with websockets.connect(COINBASE_WS, max_size=None) as ws:
                     await ws.send(SUBSCRIBE_MSG)
                     async for msg in ws:
                         data = json.loads(msg)
