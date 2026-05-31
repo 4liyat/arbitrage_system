@@ -124,3 +124,7 @@ async def websocket_endpoint(ws: WebSocket):
         while True: await ws.receive_text()
     except WebSocketDisconnect:
         ws_clients.remove(ws)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

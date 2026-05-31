@@ -62,6 +62,8 @@ def calculate_opportunity(
     total_revenue= sell_revenue - fee_sell - slippage_sell
     net_profit   = total_revenue - total_cost
     net_profit_pct = net_profit / total_cost
+    net_profit_pct_val = round(net_profit_pct * 100, 4)
+    executable = net_profit_pct_val >= MIN_NET_PROFIT_PCT * 100
 
     return ArbitrageOpportunity(
         buy_exchange   = buy_ob.exchange,
@@ -69,9 +71,10 @@ def calculate_opportunity(
         buy_price      = round(buy_price, 2),
         sell_price     = round(sell_price, 2),
         gross_spread_pct = round(gross_spread_pct * 100, 4),
-        net_profit_pct   = round(net_profit_pct * 100, 4),
+        net_profit_pct   = net_profit_pct_val,
         net_profit_usd   = round(net_profit, 4),
         volume_btc       = volume_btc,
-        executable       = net_profit_pct >= MIN_NET_PROFIT_PCT * 100,
+        executable       = executable,
         detected_at      = datetime.utcnow()
-)
+    )
+
