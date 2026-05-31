@@ -36,8 +36,8 @@ El sistema sigue una arquitectura en capas diseñada para la escalabilidad y la 
 
 ### 1. Clonar el repositorio
 ```bash
-git clone <url-del-repositorio>
-cd arbitrage-bot
+git clone https://github.com/4liyat/arbitrage_system.git
+cd arbitrage_system
 ```
 
 ### 2. Configurar el Backend
@@ -68,6 +68,12 @@ Puedes ajustar los siguientes parámetros:
 ## 📄 Evaluación Técnica
 Este sistema fue construido siguiendo estrictos estándares de calidad:
 *   **Velocidad:** Detección en el mismo ciclo de evento del update del orderbook.
+*   **Robustez:** Manejo de excepciones y reconexión automática.
+*   **Calidad de Código:** Tipado estricto con Pydantic y separación clara de responsabilidades.
+
+---
+Desarrollado para el hackathon de arbitraje cripto.
+ento del update del orderbook.
 *   **Robustez:** Manejo de excepciones y reconexión automática.
 *   **Calidad de Código:** Tipado estricto con Pydantic y separación clara de responsabilidades.
 
